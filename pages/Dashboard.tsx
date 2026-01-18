@@ -1,0 +1,316 @@
+import React, { useState, useMemo } from 'react';
+import { useData } from '../context/DataContext';
+import StatCard from '../components/StatCard';
+import { DollarSign, TrendingUp, CreditCard, Calendar, Package, ShoppingBag } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+} from 'recharts';
+
+// Fallback color generator for dynamic brands
+const stringToColor = (str: string) => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    let color = '#';
+    for (let i = 0; i < 3; i++) {
+        const value = (hash >> (i * 8)) & 0xFF;
+        color += ('00' + value.toString(16)).substr(-2);
+    }
+    return color;
+}
+
+const BRAND_COLORS: Record<string, string> = {
+  Samsung: '#3B82F6', // Blue
+  Apple: '#1F2937',   // Gray 900
+  Realme: '#F59E0B',  // Amber
+  Oppo: '#10B981',    // Emerald
+  Xiaomi: '#F97316',  // Orange
+  Nokia: '#1E40AF',   // Dark Blue
+  Symphony: '#EF4444',// Red
+  Sony: '#000000',    // Black
+  OnePlus: '#DC2626', // Red 600
+  Anker: '#0EA5E9',   // Sky Blue
+  Joyroom: '#8B5CF6', // Violet
+  Boat: '#EC4899',    // Pink
+  Haylou: '#84CC16',  // Lime
+  Remax: '#A855F7',   // Purple
+  UiiSii: '#6366F1'   // Indigo
+};
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white p-3 border border-gray-100 shadow-lg rounded-lg z-50">
+        <p className="font-bold text-gray-800 mb-2">{label}</p>
+        <div className="space-y-1">
+          {payload.map((entry: any) => (
+            entry.value > 0 && (
+              <div key={entry.name} className="flex items-center gap-2 text-sm">
+                <div 
+                  className="w-2 h-2 rounded-full" 
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span className="text-gray-600">{entry.name}:</span>
+                <span className="font-medium text-gray-900">{entry.value} units</span>
+              </div>
+            )
+          ))}
+          <div className="pt-2 mt-2 border-t border-gray-100 flex justify-between gap-4">
+             <span className="text-sm font-medium text-gray-600">Total:</span>
+             <span className="text-sm font-bold text-gray-900">
+               {payload.reduce((acc: number, curr: any) => acc + (curr.value || 0), 0)} units
+             </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+// Helper to get local date string YYYY-MM-DD
+const getTodayString = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const Dashboard = () => {
+  const { allSales, products } = useData();
+  
+  // 1. Initialize with current date
+  const [selectedDate, setSelectedDate] = useState(getTodayString);
+
+  // Filter Sales based on selection
+  const dateSales = useMemo(() => {
+    return allSales.filter(sale => sale.date === selectedDate);
+  }, [allSales, selectedDate]);
+
+  // Get Stats
+  const currentStats = useMemo(() => {
+      const stats = {
+          totalSales: 0,
+          totalProfit: 0,
+          revenue: 0
+      };
+      
+      dateSales.forEach(sale => {
+          // Total Items Sold (Qty)
+          const itemsQty = sale.items.reduce((acc, i) => acc + i.quantity, 0);
+          stats.totalSales += itemsQty;
+          
+          // Revenue (Paid Amount for sales on this day)
+          stats.revenue += (sale.paidAmount || 0);
+
+          // Profit (Only for fully paid sales to keep it simple/safe)
+          if (!sale.dueAmount || sale.dueAmount <= 0) {
+               const cost = sale.items.reduce((acc, i) => acc + (i.buyingPrice * i.quantity), 0);
+               const saleProfit = sale.totalAmount - cost;
+               stats.totalProfit += saleProfit;
+          }
+      });
+      return stats;
+  }, [dateSales]);
+
+
+  // 1. Generate Daily Sales Breakdown (List of sold items)
+  const soldItemsBreakdown = useMemo(() => {
+      const itemsMap: Record<string, { name: string, brand: string, category: string, qty: number }> = {};
+      
+      dateSales.forEach(sale => {
+          sale.items.forEach(item => {
+              // Create a unique key for grouping (Product Name + Brand)
+              const key = `${item.productName}-${item.brand}`;
+              if (!itemsMap[key]) {
+                  itemsMap[key] = {
+                      name: item.productName,
+                      brand: item.brand,
+                      category: item.category,
+                      qty: 0
+                  };
+              }
+              itemsMap[key].qty += item.quantity;
+          });
+      });
+
+      // Sort by Quantity Descending
+      return Object.values(itemsMap).sort((a, b) => b.qty - a.qty);
+  }, [dateSales]);
+
+  // 2. Generate Category Stock Data (Inventory) - Remains Global
+  const { categoryStockData, activeBrands } = useMemo(() => {
+    const catMap: Record<string, Record<string, number>> = {};
+    const brandSet = new Set<string>();
+
+    products.forEach(product => {
+        const cat = product.category || 'Uncategorized';
+        const brand = product.brand || 'Unknown';
+
+        if (!catMap[cat]) catMap[cat] = {};
+        if (!catMap[cat][brand]) catMap[cat][brand] = 0;
+        
+        catMap[cat][brand] += product.quantity;
+        brandSet.add(brand);
+    });
+
+    const data = Object.keys(catMap).map(catName => {
+        return {
+            name: catName,
+            ...catMap[catName]
+        };
+    });
+
+    return { 
+        categoryStockData: data, 
+        activeBrands: Array.from(brandSet).sort() 
+    };
+  }, [products]);
+
+
+  // Helper to safely format currency
+  const formatCurrency = (val?: number) => val ? `৳${val.toLocaleString()}` : '৳0';
+
+  // Format date for display safe (avoid timezone shifts)
+  const dateDisplay = useMemo(() => {
+    if (!selectedDate) return '';
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    return dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  }, [selectedDate]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header & Filter */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Dashboard Overview</h2>
+          <p className="text-gray-500 text-sm">
+             Performance metrics for {dateDisplay}
+          </p>
+        </div>
+        
+        {/* Date Filter */}
+        <div className="relative">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">
+               <Calendar size={16} />
+            </div>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="appearance-none bg-white border border-gray-300 text-gray-700 py-2 pl-10 pr-4 rounded-lg leading-tight focus:outline-none focus:bg-white focus:border-blue-500 cursor-pointer shadow-sm font-medium"
+            />
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* 1. Daily Revenue */}
+        <StatCard 
+          title="Daily Revenue" 
+          value={formatCurrency(currentStats.revenue)} 
+          icon={CreditCard} 
+          color="orange" 
+        />
+        
+        {/* 2. Total Profit */}
+        <StatCard 
+          title="Total Profit" 
+          value={formatCurrency(currentStats.totalProfit)} 
+          icon={TrendingUp} 
+          color="green" 
+        />
+        
+        {/* 3. Total Sales */}
+        <StatCard 
+          title="Total Sales" 
+          value={currentStats.totalSales + ' units'} 
+          icon={ShoppingBag} 
+          color="blue" 
+        />
+      </div>
+
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Left: Daily Sales Breakdown (Items List) */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col h-[400px]">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <DollarSign size={18} className="text-blue-600" />
+            Daily Sales Breakdown
+          </h3>
+          
+          <div className="flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-200">
+            {soldItemsBreakdown.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                <ShoppingBag size={32} className="mb-2 opacity-50" />
+                <p>No sales recorded for this date</p>
+              </div>
+            ) : (
+              <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-50 text-gray-500 font-medium sticky top-0 z-10">
+                      <tr>
+                          <th className="px-3 py-2 bg-gray-50 rounded-tl-lg">Product</th>
+                          <th className="px-3 py-2 bg-gray-50">Brand</th>
+                          <th className="px-3 py-2 bg-gray-50">Category</th>
+                          <th className="px-3 py-2 bg-gray-50 text-right rounded-tr-lg">Qty</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                      {soldItemsBreakdown.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-3 py-3 font-medium text-gray-800">{item.name}</td>
+                              <td className="px-3 py-3 text-gray-600">{item.brand}</td>
+                              <td className="px-3 py-3">
+                                  <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs font-medium">
+                                      {item.category}
+                                  </span>
+                              </td>
+                              <td className="px-3 py-3 text-right font-bold text-gray-900">{item.qty}</td>
+                          </tr>
+                      ))}
+                  </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Bar Chart - Category Stock Breakdown */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 h-[400px] flex flex-col">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <Package size={18} className="text-green-600" />
+            Current Stock Level (Category)
+          </h3>
+          <div className="flex-1 w-full min-h-0">
+            {categoryStockData.length === 0 ? (
+               <div className="h-full flex items-center justify-center text-gray-400">
+                 No inventory data available
+               </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={categoryStockData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 11}} dy={10} interval={0} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF'}} />
+                  <Tooltip content={<CustomTooltip />} cursor={{fill: 'transparent'}} />
+                  <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }}/>
+                  {activeBrands.map(brand => (
+                    <Bar 
+                      key={brand} 
+                      dataKey={brand} 
+                      stackId="a" 
+                      fill={BRAND_COLORS[brand] || stringToColor(brand)} 
+                      radius={[0, 0, 0, 0]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;
